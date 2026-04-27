@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import android.widget.ArrayAdapter
@@ -86,30 +87,46 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun checkPermissions(): Boolean {
-        val needed = arrayOf(
-            Manifest.permission.RECORD_AUDIO,
-            Manifest.permission.POST_NOTIFICATIONS,
-            Manifest.permission.BODY_SENSORS
-        )
+        val needed = mutableListOf(Manifest.permission.RECORD_AUDIO)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            needed += Manifest.permission.POST_NOTIFICATIONS
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT_WATCH) {
+            needed += Manifest.permission.BODY_SENSORS
+        }
         return needed.all { ActivityCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED }
     }
 
     private fun requestPermissions() {
-        permissionLauncher.launch(
-            arrayOf(
-                Manifest.permission.RECORD_AUDIO,
-                Manifest.permission.POST_NOTIFICATIONS,
-                Manifest.permission.BODY_SENSORS
-            )
-        )
+        val needed = mutableListOf(Manifest.permission.RECORD_AUDIO)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            needed += Manifest.permission.POST_NOTIFICATIONS
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT_WATCH) {
+            needed += Manifest.permission.BODY_SENSORS
+        }
+        permissionLauncher.launch(needed.toTypedArray())
     }
 
     private fun startMonitoringService() {
-        val intent = Intent(this, AudioMonitorService::class.java).apply {
-            action = AudioMonitorService.ACTION_START_MONITORING
+        try {
+            val intent = Intent(this, AudioMonitorService::class.java).apply {
+                action = AudioMonitorService.ACTION_START_MONITORING
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                startForegroundService(intent)
+            } else {
+                startService(intent)
+            }
+            binding.statusTextView.text = "Моніторинг запущено"
+            binding.logListView.smoothScrollToPosition(0)
+            Toast.makeText(this, "Сервіс запущено", Toast.LENGTH_SHORT).show()
+        } catch (e: Exception) {
+            val msg = "Помилка запуску сервісу: ${e.message}"
+            binding.statusTextView.text = msg
+            logItems.add(0, msg)
+            logAdapter.notifyDataSetChanged()
+            Toast.makeText(this, msg, Toast.LENGTH_LONG).show()
         }
-        startForegroundService(intent)
-        binding.statusTextView.text = "Моніторинг запущено"
-        binding.logListView.smoothScrollToPosition(0)
     }
 }

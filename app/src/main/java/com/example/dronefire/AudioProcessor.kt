@@ -30,36 +30,63 @@ class AudioProcessor(
     private var running = false
 
     fun start() {
-        configureAudioEffects()
-        audioRecord.startRecording()
-        running = true
-        updateCallback("Запуск обробки", "", 0f, false, "Аудіо запис 16 кГц, моно, 16 біт")
-        val buffer = ShortArray(bufferSize)
-        val fftWindow = 2048
-        val fftInput = DoubleArray(fftWindow)
-        val fftOutput = DoubleArray(fftWindow)
-        val handler = Handler(Looper.getMainLooper())
+        try {
+            configureAudioEffects()
+            audioRecord.startRecording()
+            running = true
+            updateCallback("Запуск обробки", "", 0f, false, "Аудіо запис: 16 кГц, моно, 16 біт | запущено")
+            val buffer = ShortArray(bufferSize)
+            val fftWindow = 2048
+            val fftInput = DoubleArray(fftWindow)
+            val fftOutput = DoubleArray(fftWindow)
+            val handler = Handler(Looper.getMainLooper())
 
-        Thread {
-            while (running) {
-                val read = audioRecord.read(buffer, 0, fftWindow)
-                if (read <= 0) continue
-                for (i in 0 until fftWindow) {
-                    fftInput[i] = if (i < read) buffer[i].toDouble() else 0.0
+            Thread {
+                var errorCount = 0
+                try {
+                    while (running && errorCount < 10) {
+                        try {
+                            val read = audioRecord.read(buffer, 0, fftWindow)
+                            if (read <= 0) continue
+                            for (i in 0 until fftWindow) {
+                                fftInput[i] = if (i < read) buffer[i].toDouble() else 0.0
+                            }
+                            val spectrum = calculateSpectrum(fftInput, fftOutput)
+                            val bandEnergy = computeBandEnergy(spectrum, 40, 100)
+                            val pulseDetected = updatePulseBuffer(bandEnergy)
+                            val azimuth = calculateAzimuth(bandEnergy)
+                            val status = if (pulseDetected && bandEnergy > 0.05f) "ТРЕВОГА" else "Моніторинг"
+                            val alarm = pulseDetected && bandEnergy > 0.12f
+                            val spectrumText = "40-100Hz енергія: ${"%.3f".format(bandEnergy)}"
+                            val logText = "${System.currentTimeMillis()} - енергія ${"%.3f".format(bandEnergy)}, імпульс ${pulseDetected}"
+                            handler.post {
+                                updateCallback(status, spectrumText, azimuth, alarm, logText)
+                            }
+                        } catch (e: Exception) {
+                            errorCount++
+                            handler.post {
+                                updateCallback("Помилка $errorCount", "", 0f, false, 
+                                    "FFT: ${e.message?.take(50) ?: "err"} | ${e.javaClass.simpleName}")
+                            }
+                            if (errorCount >= 10) {
+                                running = false
+                                handler.post {
+                                    updateCallback("ЗУПИНЕНО", "", 0f, false, "Занадто багато помилок")
+                                }
+                            }
+                        }
+                    }
+                } catch (e: Exception) {
+                    handler.post {
+                        updateCallback("Крит помилка", "", 0f, false, 
+                            "Потік: ${e.message} | ${e.javaClass.simpleName}")
+                    }
                 }
-                val spectrum = calculateSpectrum(fftInput, fftOutput)
-                val bandEnergy = computeBandEnergy(spectrum, 40, 100)
-                val pulseDetected = updatePulseBuffer(bandEnergy)
-                val azimuth = calculateAzimuth(bandEnergy)
-                val status = if (pulseDetected && bandEnergy > 0.05f) "ТРЕВОГА" else "Моніторинг"
-                val alarm = pulseDetected && bandEnergy > 0.12f
-                val spectrumText = "40-100Hz енергія: ${"%.3f".format(bandEnergy)}"
-                val logText = "${System.currentTimeMillis()} - енергія ${"%.3f".format(bandEnergy)}, імпульс ${pulseDetected}"
-                handler.post {
-                    updateCallback(status, spectrumText, azimuth, alarm, logText)
-                }
-            }
-        }.start()
+            }.start()
+        } catch (e: Exception) {
+            updateCallback("Помилка запуску", "", 0f, false, 
+                "AudioRecord: ${e.message} | ${e.javaClass.simpleName}")
+        }
     }
 
     fun stop() {
@@ -105,7 +132,7 @@ class AudioProcessor(
         var count = 0
         for (i in spectrum.indices) {
             val freq = i * freqResolution
-            if (freq in lowHz..highHz) {
+            if (freq >= lowHz && freq <= highHz) {
                 sum += spectrum[i]
                 count++
             }
@@ -118,7 +145,7 @@ class AudioProcessor(
         if (energyHistory.size > 40) energyHistory.removeFirst()
         if (energyHistory.size < 10) return false
         val average = energyHistory.average().toFloat()
-        val variance = energyHistory.fold(0f) { acc, v -> acc + (v - average).pow(2) } / energyHistory.size
+        val variance = energyHistory.fold(0f) { acc: Float, v: Float -> acc + (v - average).pow(2f) } / energyHistory.size
         return variance > 0.0008f
     }
 

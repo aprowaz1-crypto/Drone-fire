@@ -28,13 +28,23 @@ class AudioMonitorService : Service() {
     override fun onBind(intent: Intent?): IBinder? = binder
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        createNotificationChannel()
-        when (intent?.action) {
-            ACTION_START_MONITORING -> {
-                startForeground(NOTIFICATION_ID, buildNotification("Моніторинг активний"))
-                startAudioMonitoring()
+        try {
+            createNotificationChannel()
+            when (intent?.action) {
+                ACTION_START_MONITORING -> {
+                    try {
+                        startForeground(NOTIFICATION_ID, buildNotification("Моніторинг активний"))
+                        startAudioMonitoring()
+                        sendUpdate("Ініціалізовано", "", 0f, false, "Сервіс запущено успішно")
+                    } catch (e: Exception) {
+                        val errorMsg = "Помилка запуску: ${e.message}\\n${e.javaClass.simpleName}"
+                        sendUpdate("ПОМИЛКА", "", 0f, false, errorMsg)
+                    }
+                }
+                ACTION_STOP_MONITORING -> stopSelf()
             }
-            ACTION_STOP_MONITORING -> stopSelf()
+        } catch (e: Exception) {
+            sendUpdate("КРИТИЧНА", "", 0f, false, "onStartCommand: ${e.message}")
         }
         return START_STICKY
     }
@@ -46,14 +56,23 @@ class AudioMonitorService : Service() {
     }
 
     private fun startAudioMonitoring() {
-        processor = AudioProcessor(this) { status, spectrum, azimuth, alarm, logMessage ->
-            sendUpdate(status, spectrum, azimuth, alarm, logMessage)
-            if (alarm) {
-                sendAlarmNotification(azimuth)
-                vibrateAlert()
+        try {
+            processor = AudioProcessor(this) { status, spectrum, azimuth, alarm, logMessage ->
+                try {
+                    sendUpdate(status, spectrum, azimuth, alarm, logMessage)
+                    if (alarm) {
+                        sendAlarmNotification(azimuth)
+                        vibrateAlert()
+                    }
+                } catch (e: Exception) {
+                    sendUpdate("Помилка Update", "", 0f, false, "updateCallback: ${e.message}")
+                }
             }
+            processor?.start()
+        } catch (e: Exception) {
+            val details = "AudioProcessor init: ${e.message}\\n${e.javaClass.simpleName}"
+            sendUpdate("Помилка запуску", "", 0f, false, details)
         }
-        processor?.start()
     }
 
     private fun sendUpdate(status: String, spectrum: String, azimuth: Float, alarm: Boolean, logMessage: String) {
